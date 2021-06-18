@@ -32,6 +32,9 @@ class HalfDilationSurface(SimilaritySurface):
     the oriented case, have a look at
     :meth:`flatsurf.dilation_surface.DilationSurface`.
     """
+    def canonicalize(self, in_place=False, group = "half_dilation"):
+        return super(HalfDilationSurface, self).canonicalize(group = group)
+
     def GL2R_mapping(self, matrix):
         r"""
         Deprecated. Use apply_matrix instead.

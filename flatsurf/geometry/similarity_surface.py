@@ -2417,3 +2417,144 @@ class SimilaritySurface(SageObject):
         S = S.eliminateMarkedPoints().surface()
         S.delaunay()
         return from_pyflatsurf(S)
+
+    def cmp(self, s2, limit=None):
+        r"""
+        Compare two surfaces. This is an ordering returning -1, 0, or 1.
+
+        The surfaces will be considered equal if and only if there is a translation automorphism
+        respecting the polygons and the base_labels.
+
+        If the two surfaces are infinite, we just examine the first limit polygons.
+        """
+        if self.is_finite():
+            if s2.is_finite():
+                assert limit is None, "Limit only enabled for finite surfaces."
+
+                #print("comparing number of polygons")
+                sign = self.num_polygons()-s2.num_polygons()
+                if sign>0:
+                    return 1
+                if sign<0:
+                    return -1
+                #print("comparing polygons")
+                lw1=self.walker()
+                lw2=s2.walker()
+                for p1,p2 in zip(lw1.polygon_iterator(), lw2.polygon_iterator()):
+                    # Uses Polygon.cmp:
+                    ret = p1.cmp(p2)
+                    if ret != 0:
+                        return ret
+                # Polygons are identical. Compare edge gluings.
+                #print("comparing edge gluings")
+                for pair1,pair2 in zip(lw1.edge_iterator(), lw2.edge_iterator()):
+                    l1,e1 = self.opposite_edge(pair1)
+                    l2,e2 = s2.opposite_edge(pair2)
+                    num1 = lw1.label_to_number(l1)
+                    num2 = lw2.label_to_number(l2)
+                    ret = (num1 > num2) - (num1 < num2)
+                    if ret:
+                        return ret
+                    ret = (e1 > e2) - (e1 < e2)
+                    if ret:
+                        return ret
+                return 0
+            else:
+                # s1 is finite but s2 is infinite.
+                return -1
+        else:
+            if s2.is_finite():
+                # s1 is infinite but s2 is finite.
+                return 1
+            else:
+                # both surfaces are infinite.
+                lw1=self.walker()
+                lw2=s2.walker()
+                count = 0
+                for (l1,p1),(l2,p2) in zip(lw1.label_polygon_iterator(), lw2.label_polygon_iterator()):
+                    # Uses Polygon.cmp:
+                    ret = p1.cmp(p2)
+                    if ret != 0:
+                        print("Polygons differ")
+                        return ret
+                    # If here the number of edges should be equal.
+                    for e in range(p1.num_edges()):
+                        ll1,ee1 = self.opposite_edge(l1,e)
+                        ll2,ee2 = s2.opposite_edge(l2,e)
+                        num1 = lw1.label_to_number(ll1, search=True, limit=limit)
+                        num2 = lw2.label_to_number(ll2, search=True, limit=limit)
+                        ret = (num1 > num2) - (num1 < num2)
+                        if ret:
+                            return ret
+                        ret = (ee1 > ee2) - (ee1 < ee2)
+                        if ret:
+                            return ret
+                    if count >= limit:
+                        break
+                    count += 1
+                return 0
+
+    def standardize_polygons(self, in_place=False, group = "similarity"):
+        if self.is_finite():
+            if in_place:
+                if not self.is_mutable():
+                    raise ValueError("An in_place call for standardize_polygons can only be done for a mutable surface.")
+                s=self
+            else:
+                s=self.copy(mutable=True)
+            cv = {} # dictionary for non-zero canonical vertices
+            translations={} # translations bringing the canonical vertex to the origin.
+
+
+            for l,polygon in s.label_iterator(polygons=True):
+                best=0
+                best_pt=polygon.vertex(best)
+                for v in range(1,polygon.num_edges()):
+                    pt=polygon.vertex(v)
+                    if (pt[1]<best_pt[1]) or (pt[1]==best_pt[1] and pt[0]<best_pt[0]):
+                        best=v
+                        best_pt=pt
+                # if best!=0:
+                cv[l]=best
+
+            for l,v in iteritems(cv):
+                s.set_vertex_zero(l,v,in_place=True)
+
+            us = s.underlying_surface()
+            for i in us.label_iterator():
+                us.change_polygon(i, us.polygon(i).standardize(group = group)[0])
+
+            return s
+        else:
+            assert in_place == False, "In place standardization only available for finite surfaces."
+            return TranslationSurface(LazyStandardizedPolygonSurface(self))
+
+
+    def canonicalize(self, in_place=False, group = "similarity"):
+
+
+        if in_place:
+            if not self.is_mutable():
+                raise ValueError("canonicalize with in_place=True is only defined for mutable translation surfaces.")
+            s=self
+        else:
+            s=self.copy(mutable=True)
+        if not s.is_finite():
+            raise ValueError("canonicalize is only defined for finite translation surfaces.")
+        ret=s.delaunay_decomposition(in_place=True)
+        s.standardize_polygons(in_place=True, group = group)
+        ss=s.copy(mutable=True)
+        labels={label for label in s.label_iterator()}
+        labels.remove(s.base_label())
+        for label in labels:
+            ss.underlying_surface().change_base_label(label)
+            if ss.cmp(s)>0:
+                s.underlying_surface().change_base_label(label)
+        # We now have the base_label correct.
+        # We will use the label walker to generate the canonical labeling of polygons.
+        w=s.walker()
+        w.find_all_labels()
+        s.relabel(w.label_dictionary(), in_place=True)
+        # Set immutable
+        s.underlying_surface().set_immutable()
+        return s

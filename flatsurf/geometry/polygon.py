@@ -66,6 +66,11 @@ from sage.structure.sequence import Sequence
 from .matrix_2x2 import angle
 from .subfield import number_field_elements_from_algebraics, cos_minpoly, chebyshev_T, subfield_from_elements
 
+
+
+from sage.functions.trig import arctan2, sin, cos
+from sage.functions.other import sqrt
+
 # we implement action of GL(2,K) on polygons
 
 ZZ_0 = ZZ.zero()
@@ -761,7 +766,7 @@ class Polygon(Element):
     __gt__ = __lt__
     __ge__ = __lt__
 
-    def cmp(self, other):
+    def cmp(self, other, area = True):
         r"""
         Implement a total order on polygons
         """
@@ -774,12 +779,13 @@ class Polygon(Element):
             return 1
         if sign < 0:
             return -1
-        sign = self.area() - other.area()
-        if sign > self.base_ring().zero():
-            return 1
-        if sign < self.base_ring().zero():
-            return -1
-        for v in range(1,self.num_edges()):
+        if area:
+            sign = self.area() - other.area()
+            if sign > self.base_ring().zero():
+                return 1
+            if sign < self.base_ring().zero():
+                return -1
+        for v in range(self.num_edges()):
             p = self.vertex(v)
             q = other.vertex(v)
             sign = p[0]-q[0]
@@ -1678,6 +1684,105 @@ class ConvexPolygon(Polygon):
                 raise ValueError("Vertex "+str(i)+" is not on the circle.")
         return circle
 
+    def rotate_to_upper_half_and_scale(self, index):
+        from flatsurf.geometry.similarity import SimilarityGroup
+        """Center index to origin, then rotates p counterclosewise
+        about index until it touches the line y = 0"""
+        P = ConvexPolygons(self.base_ring())
+
+        numSides = len(self.vertices())
+        p = P(edges=[self.edge((j + index)%numSides) for j in range(numSides)])
+        edge = self.edge(0)
+
+        SG = SimilarityGroup(QQ)
+        forward_map = SG(edge[0], edge[1], 0, 0)
+        backward_map = ~forward_map
+        p = P(vertices=[backward_map(self.vertex(i)) for i in range(numSides)])
+        
+        return p, backward_map
+
+
+
+    def standardize(self, group = "translation"):
+        from flatsurf.geometry.similarity import SimilarityGroup
+        SG = SimilarityGroup(self.base_ring())
+        P = ConvexPolygons(self.base_ring())
+        V = self.vertices()
+        transXY = (V[0][0], V[0][1])
+        label = 0
+        numSides = len(V)
+        for i in range(numSides):
+            if (V[i][1] < transXY[1]) or (V[i][1] == transXY[1] and V[i][0] < transXY[0]):
+                transXY = V[i]
+                label = i
+        p = P(edges=[self.edge((i + label)%numSides) for i in range(numSides)])
+        if group == "translation":
+            return p, {label : SG(1, 0, -transXY[0], -transXY[1])}
+
+
+        if group == "half_translation" or group == "half_dilation":
+            M = matrix([[-1, 0],[0, -1]])
+            if group == "half_translation":
+                ret1 = self.standardize()
+                ret2 = (M * self).standardize()
+            else:
+                ret1 = self.standardize(group = "dilation")
+                ret2 = (M * self).standardize(group = "dilation")
+            p1 = ret1[0]
+            p1_map_label = list(ret1[1].items())[0][0]
+            p1_map = list(ret1[1].items())[0][1]
+            p2 = ret2[0]
+            p2_map_label = list(ret2[1].items())[0][0]
+            p2_map =  list(ret2[1].items())[0][1] * SG(-1, 0, 0, 0)
+
+            sign = p1.cmp(p2)
+            if sign > 0:
+                return p2, {p2_map_label : p2_map}
+            elif sign == 0:
+                return p1, {p1_map_label : p1_map, p2_map_label : p2_map}
+            return p1, {p1_map_label : p1_map}
+
+        if group == "dilation":
+            V = p.vertices()
+            ymax = V[0][1]
+            for i in range(1, numSides):
+                if V[i][1] > ymax:
+                    ymax = V[i][1]
+            factor = 1 / ymax
+            p = P(vertices=[p.vertex(i)*factor for i in range(numSides)])
+            dilation_map = SG(factor, 0, - factor * transXY[0], - factor * transXY[1])
+            return p, {label : dilation_map}
+
+        if group == "similarity":
+            V = self.vertices()
+            numSides = len(V)
+            candidates = []
+            transXY = {}
+            polygon_and_map = {}
+            SGs = {}
+            for i in range(numSides):
+                transXY[i] = (-self.vertex(i)[0],-self.vertex(i)[1])
+                pp = P(edges=[self.edge((j + i)%numSides) for j in range(numSides)])
+                ret = pp.rotate_to_upper_half_and_scale(1)
+                ret_poly = ret[0]
+                ret_map = ret[1]
+                polygon_and_map[i] = ret_map
+                candidates.append(ret_poly)
+
+                
+            min_poly = candidates[0]
+            for c in candidates[1:]:
+                if c.cmp(min_poly, area = False) < 0:
+                    min_poly = c
+
+            minimal_candidate_indices = []
+
+            for i in range(numSides):
+                if candidates[i].cmp(min_poly, area = False) == 0:
+                    SGs[i] = polygon_and_map[i]
+                    minimal_candidate_indices.append(i)
+
+            return candidates[minimal_candidate_indices[0]], SGs
 class Polygons(UniqueRepresentation, Parent):
     Element = Polygon
 
